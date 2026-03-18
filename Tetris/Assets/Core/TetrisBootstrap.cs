@@ -13,6 +13,7 @@ using CodeGamified.Quality;
 using CodeGamified.Bootstrap;
 using Tetris.Game;
 using Tetris.Scripting;
+using Tetris.UI;
 
 namespace Tetris.Core
 {
@@ -69,6 +70,12 @@ namespace Tetris.Core
         private TetrisMatchManager _match;
         private TetrisProgram _playerProgram;
 
+        // Trail
+        private TetrisBlockTrail _blockTrail;
+
+        // TUI
+        private TetrisTUIManager _tuiManager;
+
         // Camera
         private CameraAmbientMotion _cameraSway;
 
@@ -114,10 +121,12 @@ namespace Tetris.Core
             CreateBoard();
             CreateMatchManager();
             CreateBoardRenderer();
+            CreateBlockTrail();
             CreateInputProvider();
 
             if (enableScripting) CreatePlayerProgram();
 
+            CreateTUI();
             WireEvents();
             StartCoroutine(RunBootSequence());
         }
@@ -215,12 +224,13 @@ namespace Tetris.Core
             var palette = CreatePalette();
             _boardRenderer = _board.gameObject.AddComponent<TetrisBoardRenderer>();
             _boardRenderer.Initialize(_board, _match, palette);
+            _boardRenderer.CreatePieceLight();
 
             // Center the board in the scene
             float boardW = TetrisBoard.Width * TetrisBoardRenderer.CellSize;
             _board.transform.position = new Vector3(-boardW * 0.5f, -TetrisBoard.Height * TetrisBoardRenderer.CellSize * 0.5f, 0f);
 
-            Log("Created BoardRenderer (3D cubes, ghost piece, frame)");
+            Log("Created BoardRenderer (3D cubes, ghost piece, frame + piece glow)");
         }
 
         private ColorPalette CreatePalette()
@@ -277,6 +287,30 @@ namespace Tetris.Core
         }
 
         // =================================================================
+        // BLOCK TRAIL
+        // =================================================================
+
+        private void CreateBlockTrail()
+        {
+            var go = new GameObject("BlockTrail");
+            _blockTrail = go.AddComponent<TetrisBlockTrail>();
+            _blockTrail.Initialize();
+            Log("Created BlockTrail (piece lock trail)");
+        }
+
+        // =================================================================
+        // TUI (.engine powered)
+        // =================================================================
+
+        private void CreateTUI()
+        {
+            var go = new GameObject("TetrisTUI");
+            _tuiManager = go.AddComponent<TetrisTUIManager>();
+            _tuiManager.Initialize(_match, _playerProgram);
+            Log("Created TUI (left debugger + right status panel)");
+        }
+
+        // =================================================================
         // EVENT WIRING
         // =================================================================
 
@@ -290,29 +324,81 @@ namespace Tetris.Core
 
             if (_match != null)
             {
-                _match.OnMatchStarted += () => Log("MATCH STARTED");
+                _match.OnMatchStarted += () =>
+                {
+                    Log("MATCH STARTED");
+                    _boardRenderer?.MarkDirty();
+                    _blockTrail?.ClearTrail();
+                };
 
                 _match.OnPointsScored += (points, lines) =>
                 {
                     string label = lines == 4 ? "TETRIS!" : $"{lines} line{(lines > 1 ? "s" : "")}";
                     Log($"{label} │ +{points} pts │ Score: {_match.Score}");
                     _boardRenderer?.MarkDirty();
+
+                    // Line clear glow — flash bright white
+                    Color lineGlow = new Color(5f, 5f, 5f);
+                    float boost = lines == 4 ? 2f : 1f;
+                    lineGlow *= boost;
+                    _boardRenderer?.FlashPieceLight(2f * boost, Color.white);
                 };
 
                 _match.OnLevelUp += level =>
                 {
                     Log($"LEVEL UP → {level} │ Drop: {_match.CurrentDropInterval:F2}s");
+                    // Level up glow
+                    _boardRenderer?.FlashPieceLight(3f, new Color(1f, 1f, 0f));
                 };
 
                 _match.OnGameOver += () =>
                 {
                     Log($"GAME OVER │ Score: {_match.Score} │ Lines: {_match.LinesTotal} │ Level: {_match.Level}");
+
+                    // Death flash — board goes red
+                    _boardRenderer?.FlashBoard(new Color(4f, 0.2f, 0.2f));
+                    _boardRenderer?.FlashPieceLight(5f, Color.red);
+                    _blockTrail?.ClearTrail();
+
                     if (autoRestart)
                         StartCoroutine(RestartAfterDelay());
                 };
 
-                _match.OnPieceLocked += () => _boardRenderer?.MarkDirty();
+                _match.OnPieceLocked += () =>
+                {
+                    _boardRenderer?.MarkDirty();
+
+                    // Flash the locked cells and spawn trail
+                    if (_match.ActivePiece != null)
+                    {
+                        // ActivePiece is about to be replaced, but positions were already recorded
+                    }
+                    _boardRenderer?.FlashPieceLight(1.5f, new Color(1f, 1f, 1f));
+                };
+
                 _match.OnLinesCleared += _ => _boardRenderer?.MarkDirty();
+
+                _match.OnPieceSpawned += () =>
+                {
+                    // Subtle glow on new piece
+                    if (_match.ActivePiece != null)
+                    {
+                        Color pieceCol = Tetrominos.Colors[_match.ActivePiece.Shape];
+                        _boardRenderer?.FlashPieceLight(0.8f, pieceCol);
+                    }
+                };
+
+                _match.OnHardDrop += rows =>
+                {
+                    // Hard drop flash + trail
+                    if (_match.ActivePiece != null && _boardRenderer != null)
+                    {
+                        var positions = _boardRenderer.GetActivePieceCellPositions();
+                        Color pieceCol = Tetrominos.Colors[_match.ActivePiece.Shape];
+                        _blockTrail?.SpawnTrailAt(positions, pieceCol);
+                        _boardRenderer.FlashPieceLight(2f + rows * 0.05f, pieceCol);
+                    }
+                };
             }
         }
 

@@ -1,5 +1,7 @@
 // Copyright CodeGamified 2025-2026
 // MIT License — Tetris
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using CodeGamified.Procedural;
 using CodeGamified.Quality;
@@ -27,6 +29,14 @@ namespace Tetris.Game
 
         // Dirty flag
         private bool _dirty = true;
+
+        // ── Glow system ──────────────────────────────────────────
+        private Light _pieceLight;
+        private const float PieceLightBaseIntensity = 0.3f;
+        private const float PieceLightDecay = 3f;
+
+        private readonly List<(Renderer renderer, Color baseColor)> _flashedRenderers = new();
+        private readonly Dictionary<GameObject, Coroutine> _cellGlowCoroutines = new();
 
         // Cell size in world units
         public const float CellSize = 0.5f;
@@ -78,6 +88,9 @@ namespace Tetris.Game
 
         private void LateUpdate()
         {
+            DecayPieceLight();
+            DecayFlashedRenderers();
+
             // Always update active piece + ghost (they move every frame)
             UpdateActivePiece();
             UpdateGhostPiece();
@@ -208,6 +221,182 @@ namespace Tetris.Game
                 mat.SetColor("_BaseColor", color);
             else
                 mat.color = color;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // GLOW / FLASH API — called by TetrisBootstrap event wiring
+        // ═══════════════════════════════════════════════════════════════
+
+        /// <summary>Create a point light that follows the active piece.</summary>
+        public void CreatePieceLight()
+        {
+            if (_pieceLight != null) return;
+            var lightGO = new GameObject("PieceGlow");
+            lightGO.transform.SetParent(transform, false);
+            _pieceLight = lightGO.AddComponent<Light>();
+            _pieceLight.type = LightType.Point;
+            _pieceLight.range = 3f;
+            _pieceLight.intensity = PieceLightBaseIntensity;
+            _pieceLight.color = new Color(0f, 1f, 1f);
+            _pieceLight.shadows = LightShadows.None;
+        }
+
+        /// <summary>Flash the piece light to a high intensity + color.</summary>
+        public void FlashPieceLight(float intensity, Color color)
+        {
+            if (_pieceLight == null) return;
+            _pieceLight.intensity = intensity;
+            _pieceLight.color = color;
+            _pieceLight.range = 3f + intensity * 0.4f;
+        }
+
+        /// <summary>Flash a locked cell at (row, col) with an HDR color burst.</summary>
+        public void FlashCellGlow(int row, int col, Color hdrColor, Color baseColor)
+        {
+            if (row < 0 || row >= _board.TotalHeight || col < 0 || col >= TetrisBoard.Width) return;
+            var go = _cellObjects[row, col];
+            if (go == null) return;
+            FlashRenderer(go, hdrColor, baseColor);
+        }
+
+        /// <summary>Flash all active piece cells with an HDR burst on lock.</summary>
+        public void FlashPieceLock(int shape, int rotation, int pivotRow, int pivotCol)
+        {
+            var offsets = Tetrominos.Rotations[shape][rotation];
+            Color baseCol = Tetrominos.Colors[shape];
+            Color hdr = new Color(baseCol.r * 4f, baseCol.g * 4f, baseCol.b * 4f);
+
+            for (int i = 0; i < offsets.Length; i++)
+            {
+                int r = pivotRow + offsets[i].row;
+                int c = pivotCol + offsets[i].col;
+                FlashCellGlow(r, c, hdr, baseCol);
+            }
+        }
+
+        /// <summary>Flash a whole row (line clear glow).</summary>
+        public void FlashRow(int row, Color hdrColor)
+        {
+            if (row < 0 || row >= _board.TotalHeight) return;
+            for (int c = 0; c < TetrisBoard.Width; c++)
+            {
+                var go = _cellObjects[row, c];
+                if (go == null || !go.activeSelf) continue;
+                int val = _board.Grid[row, c];
+                Color baseCol = val > 0 ? Tetrominos.Colors[val - 1] : new Color(0.02f, 0.02f, 0.05f);
+                FlashRenderer(go, hdrColor, baseCol);
+            }
+        }
+
+        /// <summary>Flash entire visible board (game over, etc).</summary>
+        public void FlashBoard(Color hdrColor)
+        {
+            for (int r = 0; r < TetrisBoard.Height; r++)
+            {
+                for (int c = 0; c < TetrisBoard.Width; c++)
+                {
+                    var go = _cellObjects[r, c];
+                    if (go == null || !go.activeSelf) continue;
+                    int val = _board.Grid[r, c];
+                    Color baseCol = val > 0 ? Tetrominos.Colors[val - 1] : new Color(0.02f, 0.02f, 0.05f);
+                    FlashRenderer(go, hdrColor, baseCol);
+                }
+            }
+        }
+
+        /// <summary>Get the world positions of the active piece cells (for trail spawning).</summary>
+        public Vector3[] GetActivePieceCellPositions()
+        {
+            if (_match.ActivePiece == null) return System.Array.Empty<Vector3>();
+            var offsets = Tetrominos.Rotations[_match.ActivePiece.Shape][_match.ActivePiece.Rotation];
+            var positions = new Vector3[offsets.Length];
+            for (int i = 0; i < offsets.Length; i++)
+            {
+                int r = _match.ActivePiece.PivotRow + offsets[i].row;
+                int c = _match.ActivePiece.PivotCol + offsets[i].col;
+                positions[i] = transform.TransformPoint(CellToWorld(r, c));
+            }
+            return positions;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // DECAY — runs every LateUpdate
+        // ═══════════════════════════════════════════════════════════════
+
+        private void DecayPieceLight()
+        {
+            if (_pieceLight == null) return;
+            float decay = Mathf.Clamp01(PieceLightDecay * Time.unscaledDeltaTime);
+            _pieceLight.intensity = Mathf.Lerp(_pieceLight.intensity, PieceLightBaseIntensity, decay);
+            _pieceLight.color = Color.Lerp(_pieceLight.color, new Color(0f, 1f, 1f), decay);
+            _pieceLight.range = Mathf.Lerp(_pieceLight.range, 3f, decay);
+
+            // Move light to active piece position
+            if (_match?.ActivePiece != null)
+            {
+                int r = _match.ActivePiece.PivotRow;
+                int c = _match.ActivePiece.PivotCol;
+                _pieceLight.transform.localPosition = CellToWorld(r, c) + new Vector3(0, 0, -CellSize);
+            }
+        }
+
+        private void DecayFlashedRenderers()
+        {
+            float decay = Mathf.Clamp01(PieceLightDecay * Time.unscaledDeltaTime);
+            for (int i = _flashedRenderers.Count - 1; i >= 0; i--)
+            {
+                var (fr, baseCol) = _flashedRenderers[i];
+                if (fr == null) { _flashedRenderers.RemoveAt(i); continue; }
+                var mat = fr.material;
+                Color current = mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") : mat.color;
+                Color next = Color.Lerp(current, baseCol, decay);
+                SetHDRColorMat(mat, next);
+                if (Mathf.Abs(next.r - baseCol.r) + Mathf.Abs(next.g - baseCol.g) + Mathf.Abs(next.b - baseCol.b) < 0.03f)
+                {
+                    SetHDRColorMat(mat, baseCol);
+                    _flashedRenderers.RemoveAt(i);
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // HDR HELPERS
+        // ═══════════════════════════════════════════════════════════════
+
+        private void FlashRenderer(GameObject go, Color hdrColor, Color baseColor)
+        {
+            var r = go.GetComponent<Renderer>();
+            if (r == null) return;
+            int idx = _flashedRenderers.FindIndex(e => e.renderer == r);
+            Color origColor = baseColor;
+            if (idx >= 0)
+            {
+                origColor = _flashedRenderers[idx].baseColor;
+                _flashedRenderers.RemoveAt(idx);
+            }
+            _flashedRenderers.Add((r, origColor));
+            SetHDRColorMat(r.material, hdrColor);
+        }
+
+        private static void SetHDRColor(GameObject go, Color color)
+        {
+            var renderer = go.GetComponent<Renderer>();
+            if (renderer == null) return;
+            SetHDRColorMat(renderer.material, color);
+        }
+
+        private static void SetHDRColorMat(Material mat, Color color)
+        {
+            if (mat.HasProperty("_BaseColor"))
+                mat.SetColor("_BaseColor", color);
+            else
+                mat.color = color;
+
+            if (mat.HasProperty("_EmissionColor"))
+            {
+                mat.EnableKeyword("_EMISSION");
+                mat.SetColor("_EmissionColor", color);
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════
