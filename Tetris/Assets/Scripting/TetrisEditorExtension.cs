@@ -36,7 +36,10 @@ namespace Tetris.Scripting
                 new EditorFuncInfo { Name = "get_max_height",   Hint = "tallest column height",     ArgCount = 0 },
                 new EditorFuncInfo { Name = "get_board_width",  Hint = "board width (10)",          ArgCount = 0 },
                 new EditorFuncInfo { Name = "get_board_height", Hint = "board height (20)",         ArgCount = 0 },
-                new EditorFuncInfo { Name = "get_input",        Hint = "keyboard input code",       ArgCount = 0 },
+                new EditorFuncInfo { Name = "get_input_x",      Hint = "horizontal axis (-1/0/+1)", ArgCount = 0 },
+                new EditorFuncInfo { Name = "get_input_y",      Hint = "rotation axis (+1=CW)",     ArgCount = 0 },
+                new EditorFuncInfo { Name = "get_input_q",      Hint = "hold button (0/1)",         ArgCount = 0 },
+                new EditorFuncInfo { Name = "get_action",       Hint = "drop button (0/1)",         ArgCount = 0 },
                 new EditorFuncInfo { Name = "get_board_cell",   Hint = "cell at (row, col)",        ArgCount = 2 },
                 new EditorFuncInfo { Name = "get_col_height",   Hint = "column height",             ArgCount = 1 },
 
@@ -48,6 +51,11 @@ namespace Tetris.Scripting
                 new EditorFuncInfo { Name = "rotate_cw",        Hint = "rotate clockwise",          ArgCount = 0 },
                 new EditorFuncInfo { Name = "rotate_ccw",       Hint = "rotate counter-clockwise",  ArgCount = 0 },
                 new EditorFuncInfo { Name = "hold",             Hint = "hold/swap piece",           ArgCount = 0 },
+
+                // Axis-driven commands
+                new EditorFuncInfo { Name = "move",             Hint = "axis move (dx)",             ArgCount = 1 },
+                new EditorFuncInfo { Name = "rotate",           Hint = "axis rotate (dy)",           ArgCount = 1 },
+                new EditorFuncInfo { Name = "drop",             Hint = "guarded hard drop",          ArgCount = 1 },
             };
         }
 

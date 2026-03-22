@@ -82,6 +82,16 @@ namespace Tetris.Game
             return !aboveVisible;
         }
 
+        /// <summary>Get indices of all full rows (not yet cleared). Bottom-up order.</summary>
+        public int[] GetFullRows()
+        {
+            var rows = new System.Collections.Generic.List<int>();
+            for (int row = 0; row < TotalHeight; row++)
+                if (IsRowFull(row))
+                    rows.Add(row);
+            return rows.ToArray();
+        }
+
         /// <summary>Clear completed lines. Returns number of lines cleared.</summary>
         public int ClearLines()
         {
@@ -160,6 +170,226 @@ namespace Tetris.Game
                 if (h > max) max = h;
             }
             return max;
+        }
+
+        /// <summary>Get the column index with the lowest height. Ties go to the leftmost column.</summary>
+        public int LowestColumn()
+        {
+            int minH = int.MaxValue;
+            int minCol = 0;
+            for (int c = 0; c < Width; c++)
+            {
+                int h = ColumnHeight(c);
+                if (h < minH) { minH = h; minCol = c; }
+            }
+            return minCol;
+        }
+
+        /// <summary>Sum of absolute height differences between adjacent columns (flatness measure).</summary>
+        public int Bumpiness()
+        {
+            int bump = 0;
+            int prevH = ColumnHeight(0);
+            for (int c = 1; c < Width; c++)
+            {
+                int h = ColumnHeight(c);
+                int diff = h - prevH;
+                bump += diff < 0 ? -diff : diff;
+                prevH = h;
+            }
+            return bump;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // SIMULATION HELPERS — used by placement search
+        // ═══════════════════════════════════════════════════════════════
+
+        private void SimPlacePiece(int shape, int rot, int row, int col)
+        {
+            var cells = Tetrominos.Rotations[shape][rot];
+            for (int i = 0; i < 4; i++)
+            {
+                int r = row + cells[i].row;
+                int c = col + cells[i].col;
+                if (r >= 0 && r < TotalHeight && c >= 0 && c < Width)
+                    Grid[r, c] = shape + 1;
+            }
+        }
+
+        private int SimClearLines()
+        {
+            int cleared = 0;
+            for (int r = 0; r < TotalHeight; r++)
+            {
+                bool full = true;
+                for (int c = 0; c < Width; c++)
+                    if (Grid[r, c] == 0) { full = false; break; }
+                if (full)
+                {
+                    for (int rr = r; rr < TotalHeight - 1; rr++)
+                        for (int c = 0; c < Width; c++)
+                            Grid[rr, c] = Grid[rr + 1, c];
+                    for (int c = 0; c < Width; c++)
+                        Grid[TotalHeight - 1, c] = 0;
+                    cleared++;
+                    r--;
+                }
+            }
+            return cleared;
+        }
+
+        private int SimDropRow(int shape, int rot, int col)
+        {
+            int row = TotalHeight - 1;
+            while (row > 0 && CanPlace(shape, rot, row - 1, col))
+                row--;
+            return row;
+        }
+
+        private float EvaluateBoard(int linesCleared)
+        {
+            int aggHeight = 0, holes = 0, bumpiness = 0, prevH = 0;
+            for (int c = 0; c < Width; c++)
+            {
+                int h = ColumnHeight(c);
+                aggHeight += h;
+                if (c > 0)
+                {
+                    int diff = h - prevH;
+                    bumpiness += diff < 0 ? -diff : diff;
+                }
+                prevH = h;
+                bool found = false;
+                for (int r = TotalHeight - 1; r >= 0; r--)
+                {
+                    if (Grid[r, c] != 0) found = true;
+                    else if (found) holes++;
+                }
+            }
+            return -0.51f * aggHeight + 0.76f * linesCleared
+                   - 0.36f * holes - 0.18f * bumpiness;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // AI — PLACEMENT SEARCH
+        // ═══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 1-ply: find the best (col, rot) placement for the given shape.
+        /// Simulates every (rotation, column) combo, scores the resulting board.
+        /// </summary>
+        public (int col, int rot) FindBestPlacement(int shape)
+        {
+            int[,] backup = (int[,])Grid.Clone();
+            int bestCol = Width / 2;
+            int bestRot = 0;
+            float bestScore = float.MinValue;
+
+            for (int rot = 0; rot < 4; rot++)
+            {
+                for (int col = -2; col < Width + 2; col++)
+                {
+                    int row = SimDropRow(shape, rot, col);
+                    if (!CanPlace(shape, rot, row, col)) continue;
+
+                    SimPlacePiece(shape, rot, row, col);
+                    int linesCleared = SimClearLines();
+                    float score = EvaluateBoard(linesCleared);
+
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestCol = col;
+                        bestRot = rot;
+                    }
+
+                    System.Array.Copy(backup, Grid, backup.Length);
+                }
+            }
+            return (bestCol, bestRot);
+        }
+
+        /// <summary>
+        /// 2-ply: find the best placement for currentShape considering nextShape.
+        /// For each placement of the current piece, simulates the best response
+        /// for the next piece and picks the combo with the highest board score.
+        /// </summary>
+        public (int col, int rot) FindBestPlacement2Ply(int currentShape, int nextShape)
+        {
+            int[,] original = (int[,])Grid.Clone();
+            int[,] midState = new int[TotalHeight, Width];
+            int bestCol = Width / 2;
+            int bestRot = 0;
+            float bestScore = float.MinValue;
+
+            for (int rot1 = 0; rot1 < 4; rot1++)
+            {
+                for (int col1 = -2; col1 < Width + 2; col1++)
+                {
+                    System.Array.Copy(original, Grid, original.Length);
+                    int row1 = SimDropRow(currentShape, rot1, col1);
+                    if (!CanPlace(currentShape, rot1, row1, col1)) continue;
+
+                    SimPlacePiece(currentShape, rot1, row1, col1);
+                    int lines1 = SimClearLines();
+
+                    // Save state after placing piece 1
+                    System.Array.Copy(Grid, midState, Grid.Length);
+
+                    // Find best resulting board after also placing next piece
+                    float bestPly2 = float.MinValue;
+                    for (int rot2 = 0; rot2 < 4; rot2++)
+                    {
+                        for (int col2 = -2; col2 < Width + 2; col2++)
+                        {
+                            System.Array.Copy(midState, Grid, midState.Length);
+                            int row2 = SimDropRow(nextShape, rot2, col2);
+                            if (!CanPlace(nextShape, rot2, row2, col2)) continue;
+
+                            SimPlacePiece(nextShape, rot2, row2, col2);
+                            int lines2 = SimClearLines();
+                            float score = EvaluateBoard(lines1 + lines2);
+
+                            if (score > bestPly2)
+                                bestPly2 = score;
+                        }
+                    }
+
+                    float totalScore = bestPly2 > float.MinValue
+                        ? bestPly2
+                        : EvaluateBoard(lines1);
+                    if (totalScore > bestScore)
+                    {
+                        bestScore = totalScore;
+                        bestCol = col1;
+                        bestRot = rot1;
+                    }
+                }
+            }
+
+            System.Array.Copy(original, Grid, original.Length);
+            return (bestCol, bestRot);
+        }
+
+        /// <summary>Find the column with the deepest well (lowest relative to neighbors).</summary>
+        public int FindWellColumn()
+        {
+            int bestCol = 0;
+            int bestDepth = 0;
+            for (int c = 0; c < Width; c++)
+            {
+                int h = ColumnHeight(c);
+                int leftH = c > 0 ? ColumnHeight(c - 1) : Height;
+                int rightH = c < Width - 1 ? ColumnHeight(c + 1) : Height;
+                int minNeighbor = leftH < rightH ? leftH : rightH;
+                int depth = minNeighbor - h;
+                if (depth > bestDepth)
+                {
+                    bestDepth = depth;
+                    bestCol = c;
+                }
+            }
+            return bestCol;
         }
 
         /// <summary>Get the value at a grid cell. 0 = empty, 1-7 = shape+1. Out-of-bounds = -1.</summary>

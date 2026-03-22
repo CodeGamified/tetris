@@ -14,6 +14,16 @@ namespace Tetris.Scripting
         private readonly TetrisMatchManager _match;
         private readonly TetrisBoard _board;
 
+        // Cached AI placement result (find_best_col computes, find_best_rot reads)
+        private int _cachedBestCol;
+        private int _cachedBestRot;
+        private int _cacheGeneration = -1;
+
+        // Cached 2-ply placement result
+        private int _cached2PlyCol;
+        private int _cached2PlyRot;
+        private int _cache2PlyGeneration = -1;
+
         public TetrisIOHandler(TetrisMatchManager match, TetrisBoard board)
         {
             _match = match;
@@ -78,8 +88,25 @@ namespace Tetris.Scripting
                     state.SetRegister(0, _match.CurrentDropInterval);
                     break;
                 case TetrisOpCode.GET_INPUT:
-                    state.SetRegister(0, TetrisInputProvider.Instance != null
-                        ? TetrisInputProvider.Instance.CurrentInput : 0f);
+                    state.SetRegister(0, 0f); // deprecated — use get_input_x/y/q, get_action
+                    break;
+                case TetrisOpCode.GET_INPUT_X:
+                    state.SetRegister(0, TetrisInputProvider.Instance?.InputX ?? 0f);
+                    break;
+                case TetrisOpCode.GET_INPUT_Y:
+                    state.SetRegister(0, TetrisInputProvider.Instance?.InputY ?? 0f);
+                    break;
+                case TetrisOpCode.GET_INPUT_Q:
+                    state.SetRegister(0, TetrisInputProvider.Instance?.InputQ ?? 0f);
+                    break;
+                case TetrisOpCode.GET_ACTION:
+                    state.SetRegister(0, TetrisInputProvider.Instance?.Action ?? 0f);
+                    break;
+                case TetrisOpCode.GET_LOWEST_COL:
+                    state.SetRegister(0, _board.LowestColumn());
+                    break;
+                case TetrisOpCode.GET_BUMPINESS:
+                    state.SetRegister(0, _board.Bumpiness());
                     break;
 
                 // ── Queries with args ──
@@ -114,6 +141,110 @@ namespace Tetris.Scripting
                     break;
                 case TetrisOpCode.HOLD:
                     state.SetRegister(0, _match.Hold() ? 1f : 0f);
+                    break;
+
+                // ── Axis-driven commands ──
+                case TetrisOpCode.MOVE:
+                {
+                    float dx = state.GetRegister(0);
+                    if (dx < 0) state.SetRegister(0, _match.MoveLeft() ? 1f : 0f);
+                    else if (dx > 0) state.SetRegister(0, _match.MoveRight() ? 1f : 0f);
+                    else state.SetRegister(0, 0f);
+                    break;
+                }
+                case TetrisOpCode.CMD_ROTATE:
+                {
+                    float dy = state.GetRegister(0);
+                    if (dy > 0) state.SetRegister(0, _match.RotateCW() ? 1f : 0f);
+                    else if (dy < 0) state.SetRegister(0, _match.RotateCCW() ? 1f : 0f);
+                    else state.SetRegister(0, 0f);
+                    break;
+                }
+                case TetrisOpCode.CMD_HOLD:
+                {
+                    float guard = state.GetRegister(0);
+                    state.SetRegister(0, guard != 0f ? (_match.Hold() ? 1f : 0f) : 0f);
+                    break;
+                }
+                case TetrisOpCode.CMD_DROP:
+                {
+                    float guard = state.GetRegister(0);
+                    state.SetRegister(0, guard != 0f ? _match.DoHardDrop() : 0f);
+                    break;
+                }
+
+                // ── Helper commands (full movement — complete in one call) ──
+                case TetrisOpCode.MOVE_TO:
+                {
+                    int targetCol = (int)state.GetRegister(0);
+                    int curCol = _match.ActivePiece?.PivotCol ?? targetCol;
+                    while (curCol != targetCol)
+                    {
+                        bool ok = curCol < targetCol ? _match.MoveRight() : _match.MoveLeft();
+                        if (!ok) break;
+                        curCol = _match.ActivePiece?.PivotCol ?? curCol;
+                    }
+                    state.SetRegister(0, curCol == targetCol ? 1f : 0f);
+                    break;
+                }
+                case TetrisOpCode.ORIENT:
+                {
+                    int targetRot = ((int)state.GetRegister(0)) & 3;
+                    int curRot = _match.ActivePiece?.Rotation ?? targetRot;
+                    int cwDist = (targetRot - curRot + 4) % 4;
+                    bool useCW = cwDist <= 2;
+                    int attempts = 0;
+                    while (curRot != targetRot && attempts < 4)
+                    {
+                        bool ok = useCW ? _match.RotateCW() : _match.RotateCCW();
+                        if (!ok) break;
+                        curRot = _match.ActivePiece?.Rotation ?? curRot;
+                        attempts++;
+                    }
+                    state.SetRegister(0, curRot == targetRot ? 1f : 0f);
+                    break;
+                }
+
+                // ── AI queries ──
+                case TetrisOpCode.FIND_BEST_COL:
+                {
+                    int shape = _match.ActivePiece?.Shape ?? 0;
+                    int gen = _match.PiecesPlaced;
+                    if (_cacheGeneration != gen)
+                    {
+                        var (bestCol, bestRot) = _board.FindBestPlacement(shape);
+                        _cachedBestCol = bestCol;
+                        _cachedBestRot = bestRot;
+                        _cacheGeneration = gen;
+                    }
+                    state.SetRegister(0, _cachedBestCol);
+                    break;
+                }
+                case TetrisOpCode.FIND_BEST_ROT:
+                    state.SetRegister(0, _cachedBestRot);
+                    break;
+                case TetrisOpCode.FIND_WELL_COL:
+                    state.SetRegister(0, _board.FindWellColumn());
+                    break;
+
+                // ── 2-ply AI queries ──
+                case TetrisOpCode.FIND_BEST_2_COL:
+                {
+                    int shape2 = _match.ActivePiece?.Shape ?? 0;
+                    int nextShape = _match.NextShape;
+                    int gen2 = _match.PiecesPlaced;
+                    if (_cache2PlyGeneration != gen2)
+                    {
+                        var (bestCol2, bestRot2) = _board.FindBestPlacement2Ply(shape2, nextShape);
+                        _cached2PlyCol = bestCol2;
+                        _cached2PlyRot = bestRot2;
+                        _cache2PlyGeneration = gen2;
+                    }
+                    state.SetRegister(0, _cached2PlyCol);
+                    break;
+                }
+                case TetrisOpCode.FIND_BEST_2_ROT:
+                    state.SetRegister(0, _cached2PlyRot);
                     break;
             }
         }

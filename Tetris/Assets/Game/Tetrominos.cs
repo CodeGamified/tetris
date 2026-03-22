@@ -89,16 +89,16 @@ namespace Tetris.Game
         /// <summary>Display names for each shape.</summary>
         public static readonly string[] Names = { "I", "O", "T", "S", "Z", "J", "L" };
 
-        /// <summary>Colors for each shape (classic NES-inspired).</summary>
+        /// <summary>Colors for each shape (retrowave neon palette).</summary>
         public static readonly UnityEngine.Color[] Colors = new[]
         {
-            new UnityEngine.Color(0f, 1f, 1f),       // I — cyan
-            new UnityEngine.Color(1f, 1f, 0f),       // O — yellow
-            new UnityEngine.Color(0.8f, 0f, 1f),     // T — purple
-            new UnityEngine.Color(0f, 1f, 0f),       // S — green
-            new UnityEngine.Color(1f, 0f, 0f),       // Z — red
-            new UnityEngine.Color(0f, 0f, 1f),       // J — blue
-            new UnityEngine.Color(1f, 0.5f, 0f),     // L — orange
+            new UnityEngine.Color(0f, 1f, 1f),         // I — electric cyan
+            new UnityEngine.Color(1f, 1f, 0.1f),       // O — neon yellow
+            new UnityEngine.Color(0.75f, 0.1f, 1f),    // T — neon purple
+            new UnityEngine.Color(0.15f, 1f, 0.4f),    // S — electric lime
+            new UnityEngine.Color(1f, 0.08f, 0.55f),   // Z — neon rose
+            new UnityEngine.Color(0.25f, 0.35f, 1f),   // J — electric indigo
+            new UnityEngine.Color(1f, 0.4f, 0.05f),    // L — neon orange
         };
     }
 }

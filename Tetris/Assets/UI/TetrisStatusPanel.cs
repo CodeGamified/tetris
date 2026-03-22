@@ -25,6 +25,9 @@ namespace Tetris.UI
         private TetrisProgram _playerProgram;
         private Equalizer _equalizer;
 
+        // Script label tracking
+        private string _scriptLabel;
+
         private const int SECTION_COUNT = 6;
         private const int SEC_TITLE    = 0;
         private const int SEC_MATCH    = 1;
@@ -46,27 +49,35 @@ namespace Tetris.UI
         private float[] _revealThresholds;
         private const float AsciiHold = 5f;
         private const float AsciiAnim = 1f;
-        private const int AsciiWordCount = 2;
+        private const int AsciiWordCount = 3;
         private static readonly char[] GlitchGlyphs =
             "░▒▓█▀▄▌▐╬╫╪╩╦╠╣─│┌┐└┘├┤┬┴┼".ToCharArray();
 
         private static readonly string[][] AsciiWords =
         {
+            new[] // CODE
+            {
+                "   █████████  ████████  █████████   █████████  ",
+                "  ██         ██      ██ ██      ██ ██          ",
+                "  ██         ██      ██ ██      ██ ██████████  ",
+                "  ██         ██      ██ ██      ██ ██          ",
+                "   █████████  ████████  █████████   █████████  ",
+            },
+            new[] // GAME
+            {
+                "   █████████  ████████   ████████   █████████  ",
+                "  ██         ██      ██ ██  ██  ██ ██          ",
+                "  ██   █████ ██████████ ██  ██  ██ ██████████  ",
+                "  ██      ██ ██      ██ ██  ██  ██ ██          ",
+                "   █████████ ██      ██ ██  ██  ██  █████████  ",
+            },
             new[] // TETRIS
             {
-                " ██████████ █████████ ██████████ █████████  ██  █████████ ",
-                "     ██     ██             ██     ██      ██ ██  ██        ",
-                "     ██     ██████████     ██     █████████  ██  █████████ ",
-                "     ██     ██             ██     ██    ██   ██         ██ ",
-                "     ██     █████████      ██     ██     ██  ██  █████████ ",
-            },
-            new[] // STACK
-            {
-                " █████████ ██████████  █████████  ██████████ ██    ██ ",
-                " ██             ██     ██      ██ ██         ██  ██   ",
-                " █████████      ██     ██████████ ██         ████     ",
-                "        ██      ██     ██      ██ ██         ██  ██   ",
-                " █████████      ██     ██      ██ ██████████ ██    ██ ",
+                "  ██████████ ██████████ █████████   █████████  ",
+                "      ██         ██     ██      ██ ██          ",
+                "      ██         ██     ████████    ████████   ",
+                "      ██         ██     ██     ██          ██  ",
+                "      ██         ██     ██      ██ █████████   ",
             },
         };
 
@@ -174,6 +185,18 @@ namespace Tetris.UI
 
         private void HandleInput()
         {
+            // Script selection [1]-[5]
+            if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1))
+                LoadScript(TetrisProgram.EASY_AI_CODE, "Easy");
+            else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2))
+                LoadScript(TetrisProgram.MEDIUM_AI_CODE, "Medium");
+            else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3))
+                LoadScript(TetrisProgram.HARD_AI_CODE, "Hard");
+            else if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4))
+                LoadScript(TetrisProgram.USER_CONTROLLED_CODE, "Keyboard");
+            else if (Input.GetKeyDown(KeyCode.Alpha5) || Input.GetKeyDown(KeyCode.Keypad5))
+            { _playerProgram?.UploadCode(null); _scriptLabel = null; }
+
             if (Input.GetKeyDown(KeyCode.P))
                 SimulationTime.Instance?.TogglePause();
             if (Input.GetKeyDown(KeyCode.R))
@@ -186,6 +209,13 @@ namespace Tetris.UI
                 SettingsBridge.SetMusicVolume(SettingsBridge.MusicVolume + (shift ? -0.1f : 0.1f));
             if (Input.GetKeyDown(KeyCode.F7))
                 SettingsBridge.SetSfxVolume(SettingsBridge.SfxVolume + (shift ? -0.1f : 0.1f));
+        }
+
+        private void LoadScript(string code, string label)
+        {
+            if (_playerProgram == null) return;
+            _playerProgram.UploadCode(code);
+            _scriptLabel = label;
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -223,6 +253,21 @@ namespace Tetris.UI
                 _overlays.Slider(audioBase + 3, -1,
                     () => SettingsBridge.SfxVolume,
                     v => SettingsBridge.SetSfxVolume(v));
+
+                // ── Script selection buttons ──
+                int scriptBase = SectionStart(SEC_SCRIPT);
+                Func<int, int, (int, int)> fullBtnLayout =
+                    (cs, cw) => (cs + 2, Mathf.Max(4, cw - 2));
+                _overlays.Button(scriptBase + 4, -1, fullBtnLayout,
+                    _ => LoadScript(TetrisProgram.EASY_AI_CODE, "Easy"));
+                _overlays.Button(scriptBase + 5, -1, fullBtnLayout,
+                    _ => LoadScript(TetrisProgram.MEDIUM_AI_CODE, "Medium"));
+                _overlays.Button(scriptBase + 6, -1, fullBtnLayout,
+                    _ => LoadScript(TetrisProgram.HARD_AI_CODE, "Hard"));
+                _overlays.Button(scriptBase + 7, -1, fullBtnLayout,
+                    _ => LoadScript(TetrisProgram.USER_CONTROLLED_CODE, "Keyboard"));
+                _overlays.Button(scriptBase + 8, -1, fullBtnLayout,
+                    _ => { _playerProgram?.UploadCode(null); _scriptLabel = null; });
             }
 
             _overlays.Apply(rows, null, totalChars);
@@ -368,11 +413,40 @@ namespace Tetris.UI
                 string status = _playerProgram.IsRunning
                     ? TUIColors.Fg(TUIColors.BrightGreen, "RUN")
                     : TUIColors.Dimmed("STP");
-                lines.Add($"  {status} {TUIColors.Dimmed($"{inst}i")}");
+                string label = _scriptLabel != null
+                    ? TUIColors.Fg(TUIColors.BrightMagenta, $"({_scriptLabel})")
+                    : TUIColors.Dimmed("(custom)");
+                lines.Add($"  {status} {TUIColors.Dimmed($"{inst}i")} {label}");
             }
             else
             {
                 lines.Add(TUIColors.Dimmed("  No program"));
+            }
+
+            lines.Add("");
+            lines.Add(TUIColors.Dimmed("  LOAD"));
+
+            string[] aiLabels = { "Easy", "Medium", "Hard" };
+            for (int i = 0; i < aiLabels.Length; i++)
+            {
+                bool active = _scriptLabel == aiLabels[i];
+                string key = TUIColors.Fg(TUIColors.BrightCyan, $"[{i + 1}]");
+                string lbl = active
+                    ? TUIColors.Fg(TUIColors.BrightGreen, $"{aiLabels[i]}{TUIGlyphs.ArrowL}")
+                    : TUIColors.Dimmed(aiLabels[i]);
+                lines.Add($"  {key} {lbl}");
+            }
+            {
+                bool active = _scriptLabel == "Keyboard";
+                string key = TUIColors.Fg(TUIColors.BrightCyan, "[4]");
+                string lbl = active
+                    ? TUIColors.Fg(TUIColors.BrightGreen, $"Keyboard{TUIGlyphs.ArrowL}")
+                    : TUIColors.Dimmed("Keyboard");
+                lines.Add($"  {key} {lbl}");
+            }
+            {
+                string key = TUIColors.Fg(TUIColors.BrightCyan, "[5]");
+                lines.Add($"  {key} {TUIColors.Dimmed("Reset")}");
             }
 
             lines.Add("");

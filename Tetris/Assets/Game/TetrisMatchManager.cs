@@ -62,6 +62,7 @@ namespace Tetris.Game
         public System.Action OnHoldUsed;
         public System.Action OnMatchStarted;
         public System.Action<int> OnHardDrop;                // rows dropped
+        public System.Action<int[]> OnRowsClearing;           // row indices about to be removed
 
         public void Initialize(TetrisBoard board, float baseDropInterval = 1.0f, float lockDelay = 0.5f)
         {
@@ -178,6 +179,11 @@ namespace Tetris.Game
                 OnGameOver?.Invoke();
                 return;
             }
+
+            // Pre-clear: capture full rows for visual pulse
+            int[] fullRows = _board.GetFullRows();
+            if (fullRows.Length > 0)
+                OnRowsClearing?.Invoke(fullRows);
 
             // Clear lines
             int cleared = _board.ClearLines();
